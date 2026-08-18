@@ -1,107 +1,85 @@
-"""
-app.py
-------
-Streamlit app: Bank Loan Default Risk Prediction — live demo.
-
-Run locally:
-    pip install streamlit pandas scikit-learn
-    streamlit run app.py
-"""
-
-import pickle
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import joblib
 
-st.set_page_config(page_title="Loan Risk Prediction Demo", page_icon="🏦", layout="centered")
+st.set_page_config(page_title="Bank Loan Default Risk Prediction", page_icon="🏦", layout="wide")
+
+# ---------------------------------------------------------
+# Load model, encoders, feature order
+# ---------------------------------------------------------
+model = joblib.load("loan_model.pkl")
+encoders = joblib.load("encoders.pkl")
+feature_cols = joblib.load("feature_cols.pkl")
 
 st.title("🏦 Bank Loan Default Risk Prediction")
 st.write(
-    "Enter a loan applicant's details below to predict their risk of "
-    "default, using a Logistic Regression model trained on customer "
-    "income, credit score, and loan data."
+    "Enter a loan applicant's details below to predict their risk of default, "
+    "using a Random Forest model trained on **real Kaggle credit risk data** "
+    "(32,000+ loan applications)."
 )
 
-@st.cache_resource
-def load_model():
-    with open("loan_model.pkl", "rb") as f:
-        return pickle.load(f)
-
-try:
-    model = load_model()
-except FileNotFoundError:
-    st.error("Model file not found. Run `python3 train_and_save_model.py` first.")
-    st.stop()
-
-st.subheader("Applicant Details")
+st.header("Applicant Details")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    age = st.slider("Age", 21, 65, 30)
-    income = st.number_input("Annual Income (₹)", 100000, 3000000, 500000, step=10000)
-    credit_score = st.slider("Credit Score", 300, 900, 650)
-    loan_amount = st.number_input("Loan Amount (₹)", 50000, 2000000, 500000, step=10000)
+    age = st.slider("Age", 18, 80, 30)
+    income = st.number_input("Annual Income (₹)", min_value=0, value=500000, step=10000)
+    home_ownership = st.selectbox("Home Ownership", encoders["person_home_ownership"].classes_)
+    emp_length = st.slider("Employment Length (years)", 0, 40, 5)
+    loan_intent = st.selectbox("Loan Purpose", encoders["loan_intent"].classes_)
+    loan_grade = st.selectbox("Loan Grade (A = best, G = worst)", sorted(encoders["loan_grade"].classes_))
 
 with col2:
-    tenure_years = st.selectbox("Tenure (years)", [1, 2, 3, 5, 10, 15, 20], index=3)
-    existing_loans = st.slider("Existing Loans", 0, 5, 0)
-    employment_type = st.selectbox("Employment Type", ["Salaried", "Self-Employed", "Business"])
-    education = st.selectbox("Education", ["Graduate", "Not Graduate"])
-    marital_status = st.selectbox("Marital Status", ["Single", "Married"])
-    region = st.selectbox("Region", ["North", "South", "East", "West", "Central"])
+    loan_amnt = st.number_input("Loan Amount (₹)", min_value=0, value=500000, step=10000)
+    int_rate = st.slider("Interest Rate (%)", 5.0, 25.0, 12.0, step=0.1)
+    prior_default = st.selectbox("Prior Default on File?", encoders["cb_person_default_on_file"].classes_)
+    cred_hist_length = st.slider("Credit History Length (years)", 0, 30, 5)
+
+# loan_percent_income is derived, not asked directly
+loan_percent_income = round(loan_amnt / income, 2) if income > 0 else 0
+st.caption(f"Loan as % of income (auto-calculated): **{loan_percent_income*100:.1f}%**")
+
+st.markdown("---")
 
 if st.button("Predict Default Risk", type="primary"):
-    annual_installment = loan_amount / tenure_years
-    debt_to_income = annual_installment / income
+    input_dict = {
+        "person_age": age,
+        "person_income": income,
+        "person_home_ownership": encoders["person_home_ownership"].transform([home_ownership])[0],
+        "person_emp_length": emp_length,
+        "loan_intent": encoders["loan_intent"].transform([loan_intent])[0],
+        "loan_grade": encoders["loan_grade"].transform([loan_grade])[0],
+        "loan_amnt": loan_amnt,
+        "loan_int_rate": int_rate,
+        "loan_percent_income": loan_percent_income,
+        "cb_person_default_on_file": encoders["cb_person_default_on_file"].transform([prior_default])[0],
+        "cb_person_cred_hist_length": cred_hist_length,
+    }
 
-    input_df = pd.DataFrame([{
-        "age": age,
-        "income": income,
-        "credit_score": credit_score,
-        "loan_amount": loan_amount,
-        "tenure_years": tenure_years,
-        "existing_loans": existing_loans,
-        "debt_to_income": debt_to_income,
-        "employment_type": employment_type,
-        "education": education,
-        "marital_status": marital_status,
-        "region": region
-    }])
+    input_df = pd.DataFrame([input_dict])[feature_cols]
 
-    prob = model.predict_proba(input_df)[0][1]
-    pred = model.predict(input_df)[0]
+    proba = model.predict_proba(input_df)[0][1]
+    prediction = model.predict(input_df)[0]
 
-    st.subheader("Result")
-    st.metric("Default Probability", f"{prob*100:.1f}%")
-    st.caption(f"Debt-to-Income Ratio: {debt_to_income:.2f}")
+    st.subheader("Prediction Result")
+    risk_pct = proba * 100
 
-    if pred == 1:
-        st.error("⚠️ High risk — recommend tighter approval terms or risk-based pricing.")
+    if prediction == 1:
+        st.error(f"⚠️ High Default Risk — {risk_pct:.1f}% probability of default")
     else:
-        st.success("✅ Low risk — favorable candidate for standard approval terms.")
+        st.success(f"✅ Low Default Risk — {risk_pct:.1f}% probability of default")
 
-    st.progress(min(int(prob * 100), 100))
+    st.progress(min(int(risk_pct), 100))
 
-    with st.expander("Why this prediction? (key risk factors)"):
-        notes = []
-        if credit_score < 600:
-            notes.append("Credit score below 600 is a strong default risk indicator.")
-        if debt_to_income > 0.4:
-            notes.append("Debt-to-income ratio above 0.4 indicates high repayment burden.")
-        if employment_type == "Self-Employed":
-            notes.append("Self-employed applicants show elevated risk in this dataset.")
-        if education == "Not Graduate":
-            notes.append("Non-graduate applicants show slightly higher default rates.")
-        if existing_loans >= 2:
-            notes.append("Multiple existing loans increase repayment risk.")
-        if not notes:
-            notes.append("This applicant's profile matches historically low-risk patterns.")
-        for n in notes:
-            st.write(f"- {n}")
+    with st.expander("Why this prediction? (Key risk factors)"):
+        importances = model.feature_importances_
+        feat_imp = pd.DataFrame({
+            "Feature": feature_cols,
+            "Importance": importances
+        }).sort_values("Importance", ascending=False).head(5)
+        st.write("The model weighs these factors most heavily overall:")
+        st.bar_chart(feat_imp.set_index("Feature"))
 
-st.divider()
-st.caption(
-    "Model: Logistic Regression trained on bank loan customer data. "
-    "Built as a portfolio project — see the GitHub repo for the full "
-    "analysis pipeline (SQL risk KPIs, model comparison)."
-)
+st.markdown("---")
+st.caption("Model trained on the Kaggle 'Credit Risk Dataset' (Lao Tse) — for educational/demo purposes only, not real financial advice.")

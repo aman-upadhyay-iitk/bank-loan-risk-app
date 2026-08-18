@@ -1,48 +1,101 @@
 """
-train_and_save_model.py
-------------------------
-Trains the loan default prediction model and saves it as loan_model.pkl
-for the Streamlit app.
+Train a loan default risk prediction model using the real
+Kaggle "Credit Risk Dataset" (credit_risk_dataset.csv).
 
-Run:
-    python3 train_and_save_model.py
+Run this once locally / on Streamlit Cloud build step is NOT needed --
+we train here and save the model as a .pkl file that app.py loads.
 """
 
 import pandas as pd
 import numpy as np
-import pickle
-
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import accuracy_score, classification_report
+import joblib
 
-df = pd.read_csv("bank_loans.csv")
+# ---------------------------------------------------------
+# 1. Load data
+# ---------------------------------------------------------
+df = pd.read_csv("credit_risk_dataset.csv")
 
-df["annual_installment"] = df["loan_amount"] / df["tenure_years"]
-df["debt_to_income"] = df["annual_installment"] / df["income"]
+# ---------------------------------------------------------
+# 2. Clean data
+# ---------------------------------------------------------
+# Remove obviously bad rows (data entry errors: age > 100, emp length > 60)
+df = df[(df["person_age"] <= 100) & (df["person_age"] >= 18)]
+df = df[(df["person_emp_length"].isna()) | (df["person_emp_length"] <= 60)]
 
-features_num = ["age", "income", "credit_score", "loan_amount", "tenure_years",
-                 "existing_loans", "debt_to_income"]
-features_cat = ["employment_type", "education", "marital_status", "region"]
+# Fill missing numeric values with median
+df["person_emp_length"] = df["person_emp_length"].fillna(df["person_emp_length"].median())
+df["loan_int_rate"] = df["loan_int_rate"].fillna(df["loan_int_rate"].median())
 
-X = df[features_num + features_cat]
-y = df["default"]
+# ---------------------------------------------------------
+# 3. Encode categorical columns
+# ---------------------------------------------------------
+categorical_cols = [
+    "person_home_ownership",
+    "loan_intent",
+    "loan_grade",
+    "cb_person_default_on_file",
+]
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2,
-                                                      random_state=42, stratify=y)
+encoders = {}
+for col in categorical_cols:
+    le = LabelEncoder()
+    df[col] = le.fit_transform(df[col])
+    encoders[col] = le
 
-preprocessor = ColumnTransformer([
-    ("cat", OneHotEncoder(handle_unknown="ignore"), features_cat)
-], remainder="passthrough")
+# ---------------------------------------------------------
+# 4. Features / target
+# ---------------------------------------------------------
+feature_cols = [
+    "person_age",
+    "person_income",
+    "person_home_ownership",
+    "person_emp_length",
+    "loan_intent",
+    "loan_grade",
+    "loan_amnt",
+    "loan_int_rate",
+    "loan_percent_income",
+    "cb_person_default_on_file",
+    "cb_person_cred_hist_length",
+]
 
-model = LogisticRegression(max_iter=1000, class_weight="balanced")
-pipe = Pipeline([("prep", preprocessor), ("clf", model)])
-pipe.fit(X_train, y_train)
+X = df[feature_cols]
+y = df["loan_status"]  # 1 = default, 0 = no default
 
-with open("loan_model.pkl", "wb") as f:
-    pickle.dump(pipe, f)
+# ---------------------------------------------------------
+# 5. Train / test split
+# ---------------------------------------------------------
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
 
-acc = pipe.score(X_test, y_test)
-print(f"Model trained and saved -> loan_model.pkl (test accuracy: {acc:.3f})")
+# ---------------------------------------------------------
+# 6. Train model
+# ---------------------------------------------------------
+model = RandomForestClassifier(
+    n_estimators=200,
+    max_depth=10,
+    random_state=42,
+    class_weight="balanced",
+)
+model.fit(X_train, y_train)
+
+# ---------------------------------------------------------
+# 7. Evaluate
+# ---------------------------------------------------------
+y_pred = model.predict(X_test)
+print("Accuracy:", accuracy_score(y_test, y_pred))
+print(classification_report(y_test, y_pred))
+
+# ---------------------------------------------------------
+# 8. Save model + encoders + feature order
+# ---------------------------------------------------------
+joblib.dump(model, "loan_model.pkl")
+joblib.dump(encoders, "encoders.pkl")
+joblib.dump(feature_cols, "feature_cols.pkl")
+
+print("\nSaved: loan_model.pkl, encoders.pkl, feature_cols.pkl")
