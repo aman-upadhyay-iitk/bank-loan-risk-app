@@ -14,3 +14,6 @@ applications, ~91% test accuracy).
 ## Dataset source
 Kaggle: "Credit Risk Dataset" by Lao Tse
 https://www.kaggle.com/datasets/laotse/credit-risk-dataset
+
+## SQL & Financial Analysis
+Includes standalone SQL queries (`loan_queries.sql`) and an Expected Loss (EL = PD × LGD × EAD) financial risk model (`financial_impact.py`), the same credit-risk methodology used by banks.
